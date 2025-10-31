@@ -85,7 +85,7 @@ pipeline {
           URL=$(minikube service ${SERVICE_NAME} --url)
           echo "Smoke testing at ${URL}"
           curl -sS ${URL}/ | tee response.json
-          grep -q '"message":\s*"Hello World"' response.json
+          grep -q '"message":\\s*"Hello World"' response.json
         '''
       }
     }
