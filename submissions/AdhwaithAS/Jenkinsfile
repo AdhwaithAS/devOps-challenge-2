@@ -1,0 +1,120 @@
+pipeline {
+  agent any
+
+  options {
+    timestamps()
+  }
+
+  environment {
+    APP_NAME = 'flask-app'
+    SERVICE_NAME = 'flask-service'
+    IMAGE = 'adhwaithas/flask-app:latest'
+    K8S_DEPLOY = 'deployment.yaml'
+    K8S_SERVICE = 'service.yaml'
+  }
+
+  stages {
+
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
+    }
+
+    stage('Setup Minikube') {
+      steps {
+        sh '''#!/bin/bash
+        set -euo pipefail
+
+        echo "[INFO] Checking Minikube and kubectl availability..."
+
+        if ! command -v minikube >/dev/null 2>&1; then
+          echo "ERROR: minikube not found on PATH" >&2
+          exit 1
+        fi
+        if ! command -v kubectl >/dev/null 2>&1; then
+          echo "ERROR: kubectl not found on PATH" >&2
+          exit 1
+        fi
+
+        echo "[INFO] Ensuring Minikube is running..."
+        if ! minikube status >/dev/null 2>&1; then
+          echo "Starting Minikube..."
+          minikube start
+        fi
+
+        echo "[INFO] Switching context to Minikube..."
+        kubectl config use-context minikube
+        '''
+      }
+    }
+
+    stage('Build Docker image (in Minikube)') {
+      steps {
+        sh '''#!/bin/bash
+        set -euo pipefail
+
+        echo "[INFO] Setting up Docker environment for Minikube..."
+        eval $(minikube -p minikube docker-env)
+
+        docker version
+        echo "[INFO] Building image: ${IMAGE}"
+        docker build -t ${IMAGE} .
+
+        echo "[INFO] Listing built images..."
+        docker images | grep -E "REPOSITORY|${APP_NAME}|${IMAGE}" || true
+        '''
+      }
+    }
+
+    stage('Deploy to Kubernetes') {
+      steps {
+        sh '''#!/bin/bash
+        set -euo pipefail
+
+        echo "[INFO] Applying Kubernetes manifests..."
+        kubectl apply -f ${K8S_DEPLOY}
+        kubectl apply -f ${K8S_SERVICE}
+
+        echo "[INFO] Waiting for rollout of deployment/${APP_NAME}..."
+        kubectl rollout status deployment/${APP_NAME} --timeout=180s
+
+        echo "[INFO] Current service details:"
+        kubectl get svc ${SERVICE_NAME} -o wide || true
+        '''
+      }
+    }
+
+    stage('Smoke Test') {
+      steps {
+        sh '''#!/bin/bash
+        set -euo pipefail
+
+        echo "[INFO] Running smoke test..."
+        URL=$(minikube service ${SERVICE_NAME} --url)
+        echo "[INFO] Testing endpoint: ${URL}"
+
+        curl -sS ${URL}/ | tee response.json
+
+        echo "[INFO] Validating response..."
+        grep -q '"message":\\s*"Hello World"' response.json
+
+        echo "[SUCCESS] Smoke test passed."
+        '''
+      }
+    }
+  }
+
+  post {
+    always {
+      echo "[INFO] Archiving response.json..."
+      archiveArtifacts artifacts: 'response.json', allowEmptyArchive: true
+    }
+    failure {
+      echo "[ERROR] Pipeline failed. Check logs above."
+    }
+    success {
+      echo "[SUCCESS] Deployment pipeline completed successfully!"
+    }
+  }
+}
