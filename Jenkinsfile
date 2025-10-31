@@ -1,6 +1,9 @@
 pipeline {
     agent any
-    
+    tools {
+        git 'Default'
+    }
+
     environment {
         DOCKER_IMAGE = 'adhwaithas/flask-app'
         KUBERNETES_NAMESPACE = 'default'
